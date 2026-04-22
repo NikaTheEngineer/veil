@@ -1,5 +1,5 @@
 import { ApiProperty } from "@nestjs/swagger";
-import { IsEnum, IsNotEmpty, IsString, Matches } from "class-validator";
+import { IsEnum, Matches } from "class-validator";
 
 import { CustodyProvider } from "../../common/enums/custody-provider.enum.js";
 import { SwapProvider } from "../../common/enums/swap-provider.enum.js";
@@ -45,13 +45,6 @@ export class CreateInstantSwapDto {
   fromAmount!: string;
 
   @ApiProperty({
-    example: "995000",
-    description: "Target output amount hint in atomic units as a string",
-  })
-  @IsAtomicAmountString()
-  targetToAmount!: string;
-
-  @ApiProperty({
     example: "0.005",
     description:
       "Maximum acceptable slippage as a decimal string (for example 0.005 for 0.5%)",
@@ -60,19 +53,4 @@ export class CreateInstantSwapDto {
     message: "slippage must be a decimal string between 0 and 1 inclusive",
   })
   slippage!: string;
-
-  @ApiProperty({
-    example: "quote_12345",
-    description: "Pre-fetched Fly quote identifier",
-  })
-  @IsString()
-  @IsNotEmpty()
-  quoteId!: string;
-
-  @ApiProperty({
-    example: "995000",
-    description: "Expected output amount in atomic units as a string",
-  })
-  @IsAtomicAmountString()
-  amountOut!: string;
 }

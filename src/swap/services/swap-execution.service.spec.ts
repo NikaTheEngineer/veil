@@ -41,7 +41,7 @@ describe("SwapExecutionService", () => {
       get: jest.fn().mockReturnValue({
         markTrancheReady: jest.fn(async () => {
           throw new FlySwapExecutionFailure(
-            "Execution failed because market pricing moved outside slippage tolerance. Source funds were returned to custody.",
+            "Execution failed because market pricing moved outside slippage tolerance. Source funds were returned to MagicBlock custody.",
             "SLIPPAGE_EXCEEDED",
             true,
           );
@@ -77,7 +77,7 @@ describe("SwapExecutionService", () => {
         status: SwapTrancheStatus.FAILED,
         statusReason: "SLIPPAGE_EXCEEDED",
         lastError:
-          "Execution failed because market pricing moved outside slippage tolerance. Source funds were returned to custody.",
+          "Execution failed because market pricing moved outside slippage tolerance. Source funds were returned to MagicBlock custody.",
       },
     });
     expect(prisma.swapJob.update).toHaveBeenCalledWith({
@@ -118,7 +118,7 @@ describe("SwapExecutionService", () => {
       get: jest.fn().mockReturnValue({
         markTrancheReady: jest.fn(async () => {
           throw new FlySwapExecutionFailure(
-            "Quote expired before execution. Source funds were returned to custody.",
+            "Quote expired before execution. Source funds were returned to the origin wallet.",
             "QUOTE_EXPIRED",
             false,
           );
@@ -155,7 +155,7 @@ describe("SwapExecutionService", () => {
         status: SwapTrancheStatus.FAILED,
         statusReason: "QUOTE_EXPIRED",
         lastError:
-          "Quote expired before execution. Source funds were returned to custody.",
+          "Quote expired before execution. Source funds were returned to the origin wallet.",
       },
     });
   });

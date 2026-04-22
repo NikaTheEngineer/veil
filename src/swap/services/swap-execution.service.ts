@@ -19,7 +19,6 @@ export class SwapExecutionService {
 
   async markTrancheReadyForExecution(
     trancheId: string,
-    preloadedQuote?: ReadySwapTrancheInput["preloadedQuote"],
   ): Promise<void> {
     const tranche = await this.prisma.swapTranche.findUnique({
       where: { id: trancheId },
@@ -44,7 +43,6 @@ export class SwapExecutionService {
         toMint: tranche.swapJob.toMint,
         amount: tranche.plannedAmount,
         tempWalletPublicKey: tranche.tempWalletPublicKey,
-        preloadedQuote,
       });
     } catch (error) {
       const isFlyExecutionFailure = error instanceof FlySwapExecutionFailure;

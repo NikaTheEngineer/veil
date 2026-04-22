@@ -12,6 +12,7 @@ describe("WalletService", () => {
   const custodyStrategy: jest.Mocked<CustodyProviderStrategy> = {
     provider: CustodyProvider.MAGICBLOCK,
     deposit: jest.fn(),
+    transfer: jest.fn(),
     withdraw: jest.fn(),
     getPrivateBalance: jest.fn(),
   };

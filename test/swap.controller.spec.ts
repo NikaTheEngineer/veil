@@ -153,10 +153,7 @@ describe("SwapController integration", () => {
       fromMint: "So11111111111111111111111111111111111111112",
       toMint: "So11111111111111111111111111111111111111112",
       fromAmount: "10",
-      targetToAmount: "9",
       slippage: "0.005",
-      quoteId: "quote-1",
-      amountOut: "95",
     });
 
     swapOrchestrationService.createInstantSwap.mockResolvedValue({
@@ -167,7 +164,7 @@ describe("SwapController integration", () => {
       fromMint: "So11111111111111111111111111111111111111112",
       toMint: "So11111111111111111111111111111111111111112",
       fromAmount: "10",
-      targetToAmount: "9",
+      targetToAmount: "0",
       slippage: "0.005",
       status: SwapStatus.IN_PROGRESS,
       plannedFromAmount: "10",

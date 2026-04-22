@@ -27,6 +27,7 @@ import { TempWalletCryptoService } from "./temp-wallet-crypto.service.js";
 export class SwapOrchestrationService {
   private readonly instantPlannerModel = "DIRECT_INSTANT_SWAP";
   private readonly instantPromptVersion = "instant-quote-v1";
+  private readonly instantTargetToAmountPlaceholder = "0";
 
   constructor(
     private readonly custodyProviderRegistry: CustodyProviderRegistry,
@@ -44,7 +45,7 @@ export class SwapOrchestrationService {
   async createSwap(dto: CreateSwapDto): Promise<SwapJobSummaryResponse> {
     if (dto.executionMode === SwapExecutionMode.INSTANT) {
       throw new BadRequestException(
-        "Instant swaps must use POST /swap/instant with a pre-fetched Fly quote id",
+        "Instant swaps must use POST /swap/instant",
       );
     }
 
@@ -215,7 +216,7 @@ export class SwapOrchestrationService {
         fromMint: dto.fromMint,
         toMint: dto.toMint,
         fromAmount: dto.fromAmount,
-        targetToAmount: dto.targetToAmount,
+        targetToAmount: this.instantTargetToAmountPlaceholder,
         slippage: dto.slippage,
       });
 
@@ -241,7 +242,7 @@ export class SwapOrchestrationService {
             fromMint: dto.fromMint,
             toMint: dto.toMint,
             fromAmount: dto.fromAmount,
-            targetToAmount: dto.targetToAmount,
+            targetToAmount: this.instantTargetToAmountPlaceholder,
             slippage: dto.slippage,
             status: SwapStatus.PLANNING,
             plannerModel: this.instantPlannerModel,
@@ -304,10 +305,6 @@ export class SwapOrchestrationService {
 
       await this.swapExecutionService.markTrancheReadyForExecution(
         created.trancheId,
-        {
-          quoteId: dto.quoteId,
-          amountOut: dto.amountOut,
-        },
       );
 
       return this.swapProgressService.getSwapSummary(created.swapJobId);

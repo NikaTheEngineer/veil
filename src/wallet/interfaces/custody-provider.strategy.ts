@@ -12,6 +12,23 @@ export interface PrivateBalanceInput {
   mint: string;
 }
 
+export interface CustodyTransferInput {
+  from: string;
+  to: string;
+  mint: string;
+  amount: string;
+  visibility: "public" | "private";
+  fromBalance: "base" | "ephemeral";
+  toBalance: "base" | "ephemeral";
+  initIfMissing?: boolean;
+  initAtasIfMissing?: boolean;
+  initVaultIfMissing?: boolean;
+  memo?: string;
+  minDelayMs?: string;
+  maxDelayMs?: string;
+  split?: number;
+}
+
 export interface ProviderUnsignedTransaction {
   transactionBase64: string;
   raw: JsonValue;
@@ -20,6 +37,7 @@ export interface ProviderUnsignedTransaction {
 export interface CustodyProviderStrategy {
   readonly provider: CustodyProvider;
   deposit(input: CustodyTransactionInput): Promise<ProviderUnsignedTransaction>;
+  transfer(input: CustodyTransferInput): Promise<ProviderUnsignedTransaction>;
   withdraw(
     input: CustodyTransactionInput,
   ): Promise<ProviderUnsignedTransaction>;

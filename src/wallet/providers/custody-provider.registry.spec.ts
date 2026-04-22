@@ -11,6 +11,7 @@ describe("CustodyProviderRegistry", () => {
     const strategy: CustodyProviderStrategy = {
       provider: CustodyProvider.MAGICBLOCK,
       deposit: jest.fn(async () => ({ transactionBase64: "tx", raw: {} })),
+      transfer: jest.fn(async () => ({ transactionBase64: "tx", raw: {} })),
       withdraw: jest.fn(async () => ({ transactionBase64: "tx", raw: {} })),
       getPrivateBalance: jest.fn(async () => ({ balance: "1" })),
     };
@@ -26,6 +27,7 @@ describe("CustodyProviderRegistry", () => {
     const strategy: CustodyProviderStrategy = {
       provider: CustodyProvider.MAGICBLOCK,
       deposit: jest.fn(async () => ({ transactionBase64: "tx", raw: {} })),
+      transfer: jest.fn(async () => ({ transactionBase64: "tx", raw: {} })),
       withdraw: jest.fn(async () => ({ transactionBase64: "tx", raw: {} })),
       getPrivateBalance: jest.fn(async () => ({ balance: "1" })),
     };

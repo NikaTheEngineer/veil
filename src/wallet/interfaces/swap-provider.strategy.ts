@@ -23,10 +23,6 @@ export interface ReadySwapTrancheInput {
   toMint: string;
   amount: string;
   tempWalletPublicKey: string;
-  preloadedQuote?: {
-    quoteId: string;
-    amountOut: string;
-  };
 }
 
 export interface SwapProviderStrategy {

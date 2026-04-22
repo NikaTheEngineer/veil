@@ -33,7 +33,7 @@ export class SwapController {
   }
 
   @ApiOperation({
-    summary: "Execute an instant swap from a pre-fetched Fly quote",
+    summary: "Execute an instant swap using a fresh Fly quote",
   })
   @ApiBody({ type: CreateInstantSwapDto })
   @Post("swap/instant")

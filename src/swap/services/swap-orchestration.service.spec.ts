@@ -132,6 +132,10 @@ describe("SwapOrchestrationService", () => {
     const custodyStrategy: CustodyProviderStrategy = {
       provider: CustodyProvider.MAGICBLOCK,
       deposit: jest.fn(async () => ({ transactionBase64: "deposit", raw: {} })),
+      transfer: jest.fn(async () => ({
+        transactionBase64: "transfer",
+        raw: {},
+      })),
       withdraw: jest.fn(async () => ({
         transactionBase64: "withdraw",
         raw: {},
@@ -439,7 +443,7 @@ describe("SwapOrchestrationService", () => {
       fromMint: "So11111111111111111111111111111111111111112",
       toMint: "So11111111111111111111111111111111111111112",
       fromAmount: "10",
-      targetToAmount: "9",
+      targetToAmount: "0",
       slippage: "0.005",
       status: SwapStatus.PLANNED,
       plannedFromAmount: "10",
@@ -530,7 +534,7 @@ describe("SwapOrchestrationService", () => {
     expect(swapTrancheCreateMock).not.toHaveBeenCalled();
   });
 
-  it("creates and executes an instant swap with a provided quote payload", async () => {
+  it("creates and executes an instant swap with a fresh provider quote", async () => {
     const instantPolicy: SwapPlanningPolicy = {
       executionMode: SwapExecutionMode.INSTANT,
       useClaude: false,
@@ -626,10 +630,7 @@ describe("SwapOrchestrationService", () => {
       fromMint: "So11111111111111111111111111111111111111112",
       toMint: "So11111111111111111111111111111111111111112",
       fromAmount: "10",
-      targetToAmount: "9",
       slippage: "0.005",
-      quoteId: "quote-1",
-      amountOut: "95",
     });
 
     expect(anthropicPlanningService.planTranches).not.toHaveBeenCalled();
@@ -644,9 +645,6 @@ describe("SwapOrchestrationService", () => {
     );
     expect(
       swapExecutionService.markTrancheReadyForExecution,
-    ).toHaveBeenCalledWith("tranche-id", {
-      quoteId: "quote-1",
-      amountOut: "95",
-    });
+    ).toHaveBeenCalledWith("tranche-id");
   });
 });

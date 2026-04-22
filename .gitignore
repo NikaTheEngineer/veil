@@ -4,6 +4,11 @@ node_modules/
 # Build output
 dist/
 
+# Docker
+docker/
+Dockerfile
+docker-compose.yml
+
 # Environment files
 .env
 .env.*

@@ -4,6 +4,7 @@ import type { JsonObject, JsonValue } from "../../common/types/json-value.js";
 import type {
   CustodyProviderStrategy,
   CustodyTransactionInput,
+  CustodyTransferInput,
   PrivateBalanceInput,
   ProviderUnsignedTransaction,
 } from "../interfaces/custody-provider.strategy.js";
@@ -31,6 +32,51 @@ export class MagicBlockCustodyStrategy implements CustodyProviderStrategy {
     input: CustodyTransactionInput,
   ): Promise<ProviderUnsignedTransaction> {
     return this.createTransactionRequest("withdraw", input);
+  }
+
+  async transfer(
+    input: CustodyTransferInput,
+  ): Promise<ProviderUnsignedTransaction> {
+    try {
+      const raw = await this.readTransactionResponse(
+        `${MAGICBLOCK_SPL_BASE_URL}/transfer`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            from: input.from,
+            to: input.to,
+            mint: input.mint,
+            amount: Number(input.amount),
+            visibility: input.visibility,
+            fromBalance: input.fromBalance,
+            toBalance: input.toBalance,
+            initIfMissing: input.initIfMissing ?? true,
+            initAtasIfMissing: input.initAtasIfMissing ?? true,
+            initVaultIfMissing: input.initVaultIfMissing ?? true,
+            ...(input.memo ? { memo: input.memo } : {}),
+            ...(input.minDelayMs ? { minDelayMs: input.minDelayMs } : {}),
+            ...(input.maxDelayMs ? { maxDelayMs: input.maxDelayMs } : {}),
+            ...(input.split ? { split: input.split } : {}),
+          }),
+        },
+      );
+
+      return {
+        transactionBase64: raw.transactionBase64,
+        raw,
+      };
+    } catch (error) {
+      const normalizedError =
+        error instanceof HttpException ||
+        error instanceof Error ||
+        typeof error === "string"
+          ? error
+          : String(error);
+      throw this.toProviderException("transfer request failed", normalizedError);
+    }
   }
 
   async getPrivateBalance(input: PrivateBalanceInput): Promise<JsonValue> {

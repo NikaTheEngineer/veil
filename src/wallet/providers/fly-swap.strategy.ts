@@ -11,7 +11,7 @@ import {
   createTransferInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
 import { SwapExecutionMode } from "../../common/enums/swap-execution-mode.enum.js";
 import { SwapProvider } from "../../common/enums/swap-provider.enum.js";
@@ -39,6 +39,8 @@ type ClassifiedExecutionFailure =
   | "SLIPPAGE_EXCEEDED"
   | "COMPENSATION_FAILED";
 
+type SourceFundsLocation = "CUSTODY" | "OWNER" | "TEMP_WALLET" | "SWAPPED";
+
 export class FlySwapExecutionFailure extends Error {
   constructor(
     message: string,
@@ -55,7 +57,10 @@ export class FlySwapStrategy implements SwapProviderStrategy {
   private readonly apiBaseUrl = "https://api.magpiefi.io";
   private readonly network = "solana";
   private readonly nativeSolMint = "11111111111111111111111111111111";
-  private readonly feeBufferLamports = 1_500_000n;
+  private readonly tempWalletFundingLamports = 100_000_000n;
+  private readonly custodyDepositLamportsTarget = 100_000_000n;
+  private readonly lamportFundingVisibilityRetryCount = 10;
+  private readonly lamportFundingVisibilityRetryDelayMs = 500;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -94,53 +99,50 @@ export class FlySwapStrategy implements SwapProviderStrategy {
     }
 
     const ownerAddress = this.solanaService.getPublicKey();
-    const withdrawSignature = await this.withdrawFromCustody(
-      input.custodyProvider,
-      input.fromMint,
-      input.amount,
-      ownerAddress,
-    );
-    const fundingSignature = await this.fundTempWalletFromOwner(
-      tempSigner.publicKey.toBase58(),
-      input.fromMint,
-      input.amount,
-    );
-    await this.prisma.swapTranche.update({
-      where: { id: input.trancheId },
-      data: {
-        status: SwapTrancheStatus.FUNDED,
-        statusReason:
-          "Custody withdrew tranche funds and temp wallet was funded for Fly execution",
-        withdrawSignature,
-        fundingSignature,
-      },
-    });
+    let sourceFundsLocation: SourceFundsLocation = "CUSTODY";
 
     try {
-      const quote = input.preloadedQuote
-        ? {
-            id: input.preloadedQuote.quoteId,
-            amountOut: input.preloadedQuote.amountOut,
-            transactionRequestData: await this.getTransactionPayload(
-              input.preloadedQuote.quoteId,
-            ),
-          }
-        : await this.getQuoteAndTransaction({
-            fromMint: input.fromMint,
-            toMint: input.toMint,
-            amount: input.amount,
-            slippage: tranche.swapJob.slippage,
-            fromAddress: tempSigner.publicKey.toBase58(),
-            toAddress: ownerAddress,
-          });
+      const withdrawSignature = await this.withdrawFromCustody(
+        input.custodyProvider,
+        input.fromMint,
+        input.amount,
+        ownerAddress,
+      );
+      sourceFundsLocation = "OWNER";
+
+      const fundingSignature = await this.fundTempWalletFromOwner(
+        tempSigner.publicKey.toBase58(),
+        input.fromMint,
+        input.amount,
+      );
+      sourceFundsLocation = "TEMP_WALLET";
+
+      await this.prisma.swapTranche.update({
+        where: { id: input.trancheId },
+        data: {
+          status: SwapTrancheStatus.FUNDED,
+          statusReason:
+            "Custody withdrew tranche funds and temp wallet was funded for Fly execution",
+          withdrawSignature,
+          fundingSignature,
+        },
+      });
+
+      const quote = await this.getQuoteAndTransaction({
+        fromMint: input.fromMint,
+        toMint: input.toMint,
+        amount: input.amount,
+        slippage: tranche.swapJob.slippage,
+        fromAddress: tempSigner.publicKey.toBase58(),
+        toAddress: tempSigner.publicKey.toBase58(),
+        feePayer: ownerAddress,
+      });
 
       await this.prisma.swapTranche.update({
         where: { id: input.trancheId },
         data: {
           status: SwapTrancheStatus.QUOTE_RECEIVED,
-          statusReason: input.preloadedQuote
-            ? "Fly quote supplied by instant swap request"
-            : "Fresh Fly quote received",
+          statusReason: "Fresh Fly quote received",
           quoteId: quote.id,
           quoteTool: this.provider,
         },
@@ -149,7 +151,7 @@ export class FlySwapStrategy implements SwapProviderStrategy {
       const swapSignature =
         await this.solanaService.signAndSendSerializedTransaction(
           quote.transactionRequestData,
-          [tempSigner],
+          [this.solanaService.getSigner(), tempSigner],
         );
 
       await this.prisma.swapTranche.update({
@@ -158,28 +160,49 @@ export class FlySwapStrategy implements SwapProviderStrategy {
           status: SwapTrancheStatus.SWAPPED,
           statusReason: "Fly Solana swap submitted and confirmed",
           swapSignature,
+          lastError: null,
         },
       });
+      sourceFundsLocation = "SWAPPED";
+      const settledOutputAmount = await this.getAvailableOutputAmountForDeposit(
+        tempSigner.publicKey.toBase58(),
+        input.toMint,
+        quote.amountOut,
+      );
 
       const custodyStrategy = this.custodyProviderRegistry.get(
         input.custodyProvider,
       );
-      const depositPayload = await custodyStrategy.deposit({
-        owner: ownerAddress,
+      const depositPayload = await custodyStrategy.transfer({
+        from: tempSigner.publicKey.toBase58(),
+        to: ownerAddress,
         mint: input.toMint,
-        amount: quote.amountOut,
+        amount: settledOutputAmount,
+        visibility: "private",
+        fromBalance: "base",
+        toBalance: "ephemeral",
+        initIfMissing: true,
+        initAtasIfMissing: true,
+        initVaultIfMissing: true,
       });
+      await this.ensureTempWalletHasLamports(
+        tempSigner.publicKey.toBase58(),
+        this.custodyDepositLamportsTarget,
+      );
 
       await this.prisma.swapTranche.update({
         where: { id: input.trancheId },
         data: {
           status: SwapTrancheStatus.DEPOSIT_SUBMITTED,
-          statusReason: "MagicBlock deposit transaction built and submitted",
+          statusReason:
+            "MagicBlock private transfer to ephemeral balance built and submitted",
         },
       });
 
-      const depositSignature = await this.solanaService.signAndSendTransaction(
+      const depositSignature =
+        await this.solanaService.signAndSendSerializedTransaction(
         depositPayload.transactionBase64,
+        [tempSigner],
       );
 
       await this.prisma.swapTranche.update({
@@ -189,36 +212,51 @@ export class FlySwapStrategy implements SwapProviderStrategy {
           statusReason: "Tranche swap completed and custody deposit submitted",
           depositSignature,
           executedAt: new Date(),
+          lastError: null,
         },
       });
     } catch (error) {
       const classifiedFailure = this.classifyExecutionFailure(error);
+      const shouldCompensateSourceFunds = sourceFundsLocation !== "SWAPPED";
+
+      if (shouldCompensateSourceFunds) {
+        try {
+          await this.compensateSourceFunds({
+            custodyProvider: input.custodyProvider,
+            fromMint: input.fromMint,
+            amount: input.amount,
+            ownerAddress,
+            tempSigner,
+            sourceFundsLocation,
+            executionMode: tranche.swapJob.executionMode as SwapExecutionMode,
+          });
+        } catch (compensationError) {
+          const detail =
+            compensationError instanceof Error
+              ? compensationError.message
+              : String(compensationError);
+          const failureContext = classifiedFailure
+            ? classifiedFailure.message.toLowerCase()
+            : "execution failure";
+          throw new FlySwapExecutionFailure(
+            `Compensation failed after ${failureContext}: ${detail}`,
+            "COMPENSATION_FAILED",
+            tranche.swapJob.executionMode !== SwapExecutionMode.INSTANT,
+          );
+        }
+      }
+
       if (!classifiedFailure) {
         throw error;
       }
 
-      try {
-        await this.compensateUnswappedSourceFunds({
-          custodyProvider: input.custodyProvider,
-          fromMint: input.fromMint,
-          amount: input.amount,
-          ownerAddress,
-          tempSigner,
-        });
-      } catch (compensationError) {
-        const detail =
-          compensationError instanceof Error
-            ? compensationError.message
-            : String(compensationError);
-        throw new FlySwapExecutionFailure(
-          `Compensation failed after ${classifiedFailure.message.toLowerCase()}: ${detail}`,
-          "COMPENSATION_FAILED",
-          tranche.swapJob.executionMode !== SwapExecutionMode.INSTANT,
-        );
-      }
-
+      const refundMessage = shouldCompensateSourceFunds
+        ? sourceFundsLocation === "CUSTODY"
+          ? "Source funds remained in MagicBlock custody."
+          : "Source funds were returned to MagicBlock custody."
+        : "The swap had already executed, so the source asset could not be refunded.";
       throw new FlySwapExecutionFailure(
-        `${classifiedFailure.message}. Source funds were returned to custody.`,
+        `${classifiedFailure.message}. ${refundMessage}`,
         classifiedFailure.code,
         tranche.swapJob.executionMode !== SwapExecutionMode.INSTANT,
       );
@@ -252,7 +290,7 @@ export class FlySwapStrategy implements SwapProviderStrategy {
     const ownerAddress = envSigner.publicKey;
 
     if (fromMint === this.nativeSolMint) {
-      const lamports = BigInt(amount) + this.feeBufferLamports;
+      const lamports = BigInt(amount) + this.tempWalletFundingLamports;
       return this.solanaService.transferLamports(tempWalletAddress, lamports);
     }
 
@@ -266,7 +304,7 @@ export class FlySwapStrategy implements SwapProviderStrategy {
       SystemProgram.transfer({
         fromPubkey: ownerAddress,
         toPubkey: tempWalletPublicKey,
-        lamports: this.feeBufferLamports,
+        lamports: this.tempWalletFundingLamports,
       }),
     ];
 
@@ -300,6 +338,7 @@ export class FlySwapStrategy implements SwapProviderStrategy {
     slippage: string;
     fromAddress: string;
     toAddress: string;
+    feePayer: string;
   }): Promise<{
     id: string;
     amountOut: string;
@@ -315,6 +354,76 @@ export class FlySwapStrategy implements SwapProviderStrategy {
     };
   }
 
+  private async getAvailableOutputAmountForDeposit(
+    tempWalletAddress: string,
+    mint: string,
+    fallbackAmount: string,
+  ): Promise<string> {
+    if (mint === this.nativeSolMint) {
+      return fallbackAmount;
+    }
+
+    const connection = this.solanaService.getConnection();
+    const tempAta = getAssociatedTokenAddressSync(
+      new PublicKey(mint),
+      new PublicKey(tempWalletAddress),
+    );
+    const balance = await connection.getTokenAccountBalance(tempAta);
+    const amount = balance.value.amount;
+
+    if (!amount || amount === "0") {
+      throw new BadGatewayException(
+        "Swap completed but temp wallet output token balance is empty",
+      );
+    }
+
+    return amount;
+  }
+
+  private async ensureTempWalletHasLamports(
+    tempWalletAddress: string,
+    minimumLamports: bigint,
+  ): Promise<void> {
+    const connection = this.solanaService.getConnection();
+    const tempWalletPublicKey = new PublicKey(tempWalletAddress);
+    let currentLamports = BigInt(
+      await connection.getBalance(tempWalletPublicKey),
+    );
+
+    if (currentLamports >= minimumLamports) {
+      return;
+    }
+
+    await this.solanaService.transferLamports(
+      tempWalletAddress,
+      minimumLamports - currentLamports,
+    );
+
+    for (
+      let attempt = 0;
+      attempt < this.lamportFundingVisibilityRetryCount;
+      attempt += 1
+    ) {
+      currentLamports = BigInt(await connection.getBalance(tempWalletPublicKey));
+
+      if (currentLamports >= minimumLamports) {
+        return;
+      }
+
+      await this.sleep(this.lamportFundingVisibilityRetryDelayMs);
+    }
+
+    throw new BadGatewayException(
+      `Temp wallet SOL top-up was not visible on-chain before custody execution. Current balance: ${currentLamports.toString()} lamports, required: ${minimumLamports.toString()} lamports.`,
+    );
+  }
+
+  private async sleep(durationMs: number): Promise<void> {
+    await new Promise((resolve) => {
+      setTimeout(resolve, durationMs);
+    });
+  }
+
   private async getQuote(input: {
     fromMint: string;
     toMint: string;
@@ -322,6 +431,7 @@ export class FlySwapStrategy implements SwapProviderStrategy {
     slippage: string;
     fromAddress: string;
     toAddress: string;
+    feePayer: string;
   }): Promise<{
     id: string;
     amountOut: string;
@@ -334,6 +444,7 @@ export class FlySwapStrategy implements SwapProviderStrategy {
       slippage: input.slippage,
       fromAddress: input.fromAddress,
       toAddress: input.toAddress,
+      feePayer: input.feePayer,
       gasless: "false",
     });
 
@@ -410,51 +521,51 @@ export class FlySwapStrategy implements SwapProviderStrategy {
     return null;
   }
 
-  private async compensateUnswappedSourceFunds(input: {
+  private async compensateSourceFunds(input: {
     custodyProvider: ReadySwapTrancheInput["custodyProvider"];
     fromMint: string;
     amount: string;
     ownerAddress: string;
     tempSigner: ReturnType<SolanaService["decodeBase64SecretKey"]>;
+    sourceFundsLocation: SourceFundsLocation;
+    executionMode: SwapExecutionMode;
   }): Promise<void> {
-    await this.returnFundsFromTempWallet(
-      input.tempSigner,
-      input.ownerAddress,
-      input.fromMint,
-      input.amount,
-    );
-
-    const custodyStrategy = this.custodyProviderRegistry.get(
-      input.custodyProvider,
-    );
-    const depositPayload = await custodyStrategy.deposit({
-      owner: input.ownerAddress,
-      mint: input.fromMint,
-      amount: input.amount,
-    });
-
-    await this.solanaService.signAndSendTransaction(
-      depositPayload.transactionBase64,
-    );
+    switch (input.sourceFundsLocation) {
+      case "CUSTODY":
+        return;
+      case "OWNER":
+        await this.depositBackIntoCustody(
+          input.custodyProvider,
+          input.fromMint,
+          input.amount,
+          input.ownerAddress,
+        );
+        return;
+      case "TEMP_WALLET":
+        await this.returnFundsFromTempWallet(
+          input.tempSigner,
+          input.ownerAddress,
+          input.fromMint,
+        );
+        await this.depositBackIntoCustody(
+          input.custodyProvider,
+          input.fromMint,
+          input.amount,
+          input.ownerAddress,
+        );
+        return;
+      case "SWAPPED":
+        return;
+    }
   }
 
   private async returnFundsFromTempWallet(
     tempSigner: ReturnType<SolanaService["decodeBase64SecretKey"]>,
     ownerAddress: string,
     fromMint: string,
-    amount: string,
   ): Promise<void> {
     if (fromMint === this.nativeSolMint) {
-      await this.solanaService.sendInstructions(
-        [
-          SystemProgram.transfer({
-            fromPubkey: tempSigner.publicKey,
-            toPubkey: new PublicKey(ownerAddress),
-            lamports: BigInt(amount),
-          }),
-        ],
-        tempSigner,
-      );
+      await this.drainTempWalletLamports(tempSigner, ownerAddress);
       return;
     }
 
@@ -483,16 +594,99 @@ export class FlySwapStrategy implements SwapProviderStrategy {
         tempAta,
         ownerAta,
         tempWalletPublicKey,
-        BigInt(amount),
+        BigInt(await connection.getTokenAccountBalance(tempAta).then((result) => result.value.amount)),
       ),
       createCloseAccountInstruction(
         tempAta,
-        tempWalletPublicKey,
+        ownerPublicKey,
         tempWalletPublicKey,
       ),
     );
 
     await this.solanaService.sendInstructions(instructions, tempSigner);
+    await this.drainTempWalletLamports(tempSigner, ownerAddress);
+  }
+
+  private async depositBackIntoCustody(
+    custodyProvider: ReadySwapTrancheInput["custodyProvider"],
+    mint: string,
+    amount: string,
+    ownerAddress: string,
+  ): Promise<void> {
+    const custodyStrategy = this.custodyProviderRegistry.get(custodyProvider);
+    const depositPayload = await custodyStrategy.deposit({
+      owner: ownerAddress,
+      mint,
+      amount,
+    });
+
+    await this.solanaService.signAndSendTransaction(
+      depositPayload.transactionBase64,
+    );
+  }
+
+  private async drainTempWalletLamports(
+    tempSigner: ReturnType<SolanaService["decodeBase64SecretKey"]>,
+    ownerAddress: string,
+  ): Promise<void> {
+    const connection = this.solanaService.getConnection();
+    const balance = await connection.getBalance(tempSigner.publicKey);
+
+    if (balance <= 0) {
+      return;
+    }
+
+    const destination = new PublicKey(ownerAddress);
+    const feeEstimate = await this.estimateDrainFee(
+      tempSigner.publicKey,
+      destination,
+    );
+    const transferableLamports = balance - feeEstimate;
+
+    if (transferableLamports <= 0) {
+      return;
+    }
+
+    await this.solanaService.sendInstructions(
+      [
+        SystemProgram.transfer({
+          fromPubkey: tempSigner.publicKey,
+          toPubkey: destination,
+          lamports: transferableLamports,
+        }),
+      ],
+      tempSigner,
+    );
+  }
+
+  private async estimateDrainFee(
+    fromPubkey: PublicKey,
+    toPubkey: PublicKey,
+  ): Promise<number> {
+    try {
+      const connection = this.solanaService.getConnection();
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey,
+          toPubkey,
+          lamports: 1,
+        }),
+      );
+      transaction.feePayer = fromPubkey;
+      transaction.recentBlockhash = (
+        await connection.getLatestBlockhash()
+      ).blockhash;
+
+      const fee = await transaction.getEstimatedFee(connection);
+
+      if (fee !== null) {
+        return fee;
+      }
+    } catch {
+      // Fallback keeps the refund path alive when fee estimation is unavailable.
+    }
+
+    return 10_000;
   }
 
   private async getTransactionPayload(quoteId: string): Promise<string> {

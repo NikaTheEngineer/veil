@@ -90,6 +90,44 @@ describe("MagicBlockCustodyStrategy", () => {
     expect(result.transactionBase64).toBe("base64-withdraw");
   });
 
+  it("builds the private transfer request", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ transactionBase64: "base64-transfer" }), {
+        status: 200,
+      }),
+    );
+
+    const result = await strategy.transfer({
+      from: "from-address",
+      to: "to-address",
+      mint: "So11111111111111111111111111111111111111112",
+      amount: "7",
+      visibility: "private",
+      fromBalance: "base",
+      toBalance: "ephemeral",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://payments.magicblock.app/v1/spl/transfer",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          from: "from-address",
+          to: "to-address",
+          mint: "So11111111111111111111111111111111111111112",
+          amount: 7,
+          visibility: "private",
+          fromBalance: "base",
+          toBalance: "ephemeral",
+          initIfMissing: true,
+          initAtasIfMissing: true,
+          initVaultIfMissing: true,
+        }),
+      }),
+    );
+    expect(result.transactionBase64).toBe("base64-transfer");
+  });
+
   it("requests private balance with TEE auth", async () => {
     authService.getAuthorizationToken.mockResolvedValue("tee-token");
     fetchMock.mockResolvedValue(
