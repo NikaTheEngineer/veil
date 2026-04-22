@@ -1,0 +1,8 @@
+export enum SwapStatus {
+  PLANNING = "PLANNING",
+  PLANNED = "PLANNED",
+  IN_PROGRESS = "IN_PROGRESS",
+  PAUSED = "PAUSED",
+  COMPLETED = "COMPLETED",
+  FAILED = "FAILED",
+}

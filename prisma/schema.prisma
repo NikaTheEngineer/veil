@@ -1,0 +1,119 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CustodyProvider {
+  MAGICBLOCK
+}
+
+enum SwapProvider {
+  FLY
+}
+
+enum SwapExecutionMode {
+  INSTANT
+  FAST
+  SECURE
+}
+
+enum SwapStatus {
+  PLANNING
+  PLANNED
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  FAILED
+}
+
+enum SwapTrancheStatus {
+  ADDRESS_GENERATED
+  FUNDING_SUBMITTED
+  FUNDED
+  QUOTE_RECEIVED
+  SWAP_SUBMITTED
+  SWAPPED
+  DEPOSIT_SUBMITTED
+  COMPLETED
+  FAILED
+}
+
+model SwapJob {
+  id                     String            @id @default(uuid())
+  custodyProvider        CustodyProvider
+  swapProvider           SwapProvider
+  executionMode          SwapExecutionMode
+  fromMint               String
+  toMint                 String
+  fromAmount             String
+  targetToAmount         String
+  slippage               String
+  status                 SwapStatus
+  plannerModel           String
+  plannerPromptVersion   String
+  planningCurrentUtc     DateTime
+  plannedFromAmount      String
+  swappedFromAmount      String
+  remainingFromAmount    String
+  sourceDepositSignature String?
+  totalTranches          Int
+  readyTranches          Int
+  fundedTranches         Int
+  submittedSwapTranches  Int
+  depositedTranches      Int
+  failedTranches         Int
+  tranches               SwapTranche[]
+  plannerRuns            SwapPlannerRun[]
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  @@index([status])
+}
+
+model SwapTranche {
+  id                            String            @id @default(uuid())
+  swapJobId                     String
+  swapJob                       SwapJob           @relation(fields: [swapJobId], references: [id], onDelete: Cascade)
+  sequence                      Int
+  plannedAmount                 String
+  executeAtUtc                  DateTime
+  tempWalletPublicKey           String
+  encryptedTempWalletSecret     String
+  tempWalletEncryptionIv        String
+  tempWalletEncryptionAuthTag   String
+  tempWalletEncryptionAlgorithm String
+  status                        SwapTrancheStatus
+  statusReason                  String?
+  withdrawSignature             String?
+  fundingSignature              String?
+  swapSignature                 String?
+  depositSignature              String?
+  quoteId                       String?
+  quoteTool                     String?
+  lastError                     String?
+  executedAt                    DateTime?
+  createdAt                     DateTime          @default(now())
+  updatedAt                     DateTime          @updatedAt
+
+  @@unique([swapJobId, sequence])
+  @@index([swapJobId, executeAtUtc])
+  @@index([status, executeAtUtc])
+}
+
+model SwapPlannerRun {
+  id                  String   @id @default(uuid())
+  swapJobId           String
+  swapJob             SwapJob  @relation(fields: [swapJobId], references: [id], onDelete: Cascade)
+  model               String
+  rawRequestJson      Json
+  rawResponseJson     Json?
+  validationSucceeded Boolean
+  errorMessage        String?
+  createdAt           DateTime @default(now())
+
+  @@index([swapJobId, createdAt])
+}
